@@ -6,10 +6,10 @@ use crate::trap::TrapContext;
 use core::arch::asm;
 use lazy_static::*;
 
-const USER_STACK_SIZE: usize = 4096 * 2;
+pub const USER_STACK_SIZE: usize = 4096 * 2;
 const KERNEL_STACK_SIZE: usize = 4096 * 2;
 const MAX_APP_NUM: usize = 16;
-const APP_BASE_ADDRESS: usize = 0x80400000;
+pub const APP_BASE_ADDRESS: usize = 0x80400000;
 const APP_SIZE_LIMIT: usize = 0x20000;
 
 #[repr(align(4096))]
@@ -50,20 +50,26 @@ impl UserStack {
 
 struct AppManager {
     num_app: usize,
-    current_app: usize,
+    next_app: usize,
     app_start: [usize; MAX_APP_NUM + 1],
 }
 
 impl AppManager {
+    /// if 'num' is incorrect, ret will be (0, 0).
+    /// because there is no Err defined in this project
+    fn get_app_addr(&self, num: usize) -> (usize, usize) {
+        if num > self.num_app {
+            return (0, 0);
+        }
+
+        (self.app_start[num], self.app_start[num + 1])
+    }
+
     pub fn print_app_info(&self) {
         println!("[kernel] num_app = {}", self.num_app);
         for i in 0..self.num_app {
-            println!(
-                "[kernel] app_{} [{:#x}, {:#x})",
-                i,
-                self.app_start[i],
-                self.app_start[i + 1]
-            );
+            let addr = self.get_app_addr(i);
+            println!("[kernel] app_{} [{:#x}, {:#x})", i, addr.0, addr.1);
         }
     }
 
@@ -90,12 +96,12 @@ impl AppManager {
         asm!("fence.i");
     }
 
-    pub fn get_current_app(&self) -> usize {
-        self.current_app
+    pub fn get_next_app(&self) -> usize {
+        self.next_app
     }
 
     pub fn move_to_next_app(&mut self) {
-        self.current_app += 1;
+        self.next_app += 1;
     }
 }
 
@@ -113,7 +119,7 @@ lazy_static! {
             app_start[..=num_app].copy_from_slice(app_start_raw);
             AppManager {
                 num_app,
-                current_app: 0,
+                next_app: 0,
                 app_start,
             }
         })
@@ -130,10 +136,19 @@ pub fn print_app_info() {
     APP_MANAGER.exclusive_access().print_app_info();
 }
 
+pub fn get_current_app_addr() -> (usize, usize) {
+    let app_manager = APP_MANAGER.exclusive_access();
+    app_manager.get_app_addr(app_manager.get_next_app() - 1)
+}
+
+pub fn get_user_stack_sp() -> usize {
+    USER_STACK.get_sp()
+}
+
 /// run next app
 pub fn run_next_app() -> ! {
     let mut app_manager = APP_MANAGER.exclusive_access();
-    let current_app = app_manager.get_current_app();
+    let current_app = app_manager.get_next_app();
     unsafe {
         app_manager.load_app(current_app);
     }
